@@ -1,0 +1,243 @@
+SPEC START
+
+Build a mobile application (iOS + Android) called "Drop & Sell" — a marketplace exclusively for the City of Baguio, Philippines, where sellers list items for pickup at physical drop-off hubs located within Baguio, and buyers reserve/purchase those items once they're confirmed dropped off. Follow professional, production-grade architecture and security practices throughout.
+
+Geographic scope: This app serves the City of Baguio only. Every dropping area registered in the system must be located within Baguio's city limits. Reflect this scoping in the UI (map defaults centered on Baguio, no city/region selector needed) and copy throughout ("Baguio's trusted drop-off marketplace" rather than generic marketplace language).
+
+1. Recommended Tech Stack
+Framework: React Native with Expo (cross-platform iOS + Android from one codebase, free tier, large ecosystem, well-supported by most AI app builders).
+Styling: NativeWind (Tailwind CSS syntax for React Native).
+Navigation: React Navigation — bottom tab navigator for main sections, stack navigators for drill-down detail screens.
+Backend & Database: Supabase (PostgreSQL, Auth, Row Level Security, Realtime, Storage for item photos) — works the same way for mobile as web via the supabase-js client.
+Auth: Supabase Auth — local email/password and "Continue with Google" OAuth (see Section 4A).
+State/data fetching: TanStack Query (React Query).
+Forms/validation: React Hook Form + Zod.
+Push notifications: Expo Notifications, triggered by Supabase Realtime/Edge Functions.
+Camera/photo upload: expo-image-picker (camera or gallery) uploading directly to Supabase Storage.
+Secure token storage: expo-secure-store for the Supabase session, not plain AsyncStorage.
+Build & distribution: Expo Application Services (EAS Build) for generating installable builds; publish to the App Store and Google Play when ready, or distribute test builds via Expo/TestFlight during development.
+
+(If the AI tool you're using only supports Flutter instead of React Native, the same spec applies — swap in Flutter + Riverpod/Bloc + Supabase Flutter SDK; the schema, flows, and security rules below don't change.)
+
+2. User Roles
+Buyer/User — default role on registration. Browses dropping areas, views items, gets notified.
+Seller — a user who has registered/upgraded a seller profile. Can upload items and partner with dropping areas.
+Dropping Area Admin (Hub Manager) — manages a physical drop-off location: confirms items as "dropped," approves seller partnership requests.
+Super Admin — platform-level oversight (approve hubs, resolve disputes, view all transactions).
+
+A single account can hold both Buyer and Seller capabilities (role flags, not separate logins).
+
+3. Core Entities / Database Schema (Postgres)
+users
+  id (uuid, pk, references auth.users)
+  full_name
+  email
+  phone
+  is_seller (boolean, default false)
+  created_at
+
+dropping_areas
+  id (uuid, pk)
+  name
+  address
+  latitude, longitude                  -- constrained to Baguio's city bounds
+  contact_info
+  admin_user_id (fk -> users.id)
+  status (enum: pending_approval, active, suspended)
+  created_at
+
+seller_profiles
+  id (uuid, pk)
+  user_id (fk -> users.id, unique)
+  business_name
+  bio
+  verified (boolean, default false)
+  created_at
+
+seller_dropping_area_partnerships
+  id (uuid, pk)
+  seller_id (fk -> seller_profiles.id)
+  dropping_area_id (fk -> dropping_areas.id)
+  status (enum: pending, approved, rejected, terminated)  -- defaults to 'pending' on creation; never auto-approved
+  requested_at
+  approved_at
+
+items
+  id (uuid, pk)
+  seller_id (fk -> seller_profiles.id)
+  dropping_area_id (fk -> dropping_areas.id)
+  title
+  description
+  product_code (text, unique)          -- seller-assigned SKU/tracking code, shown on item & used for hub verification
+  buyer_name (text, nullable)          -- name of the buyer this item is earmarked for, if pre-arranged
+  amount (numeric)                     -- the item's sale price, set by the seller
+  base_handling_fee (numeric)
+  late_handling_fee (numeric)          -- additional fee added on top of the base fee once the deadline is exceeded
+  photo_url
+  status (enum: pending_dropoff, dropped, sold, expired, cancelled)
+  dropped_at (timestamp, nullable)     -- when it actually arrived at the hub
+  deadline_at (timestamp)              -- pickup/sale deadline
+  created_at
+
+transactions
+  id (uuid, pk)
+  item_id (fk -> items.id)
+  buyer_id (fk -> users.id)
+  item_amount (numeric)
+  handling_fee_applied (numeric)       -- base or base+late, snapshot at purchase time
+  total_amount (numeric)
+  status (enum: reserved, paid, completed, cancelled)
+  created_at
+
+notifications
+  id (uuid, pk)
+  user_id (fk -> users.id)
+  type (enum: item_dropped, deadline_passed, fee_updated, purchase_confirmed)
+  title
+  message
+  related_item_id (fk -> items.id, nullable)
+  is_read (boolean, default false)
+  created_at
+
+push_tokens
+  id (uuid, pk)
+  user_id (fk -> users.id)
+  expo_push_token (text)
+  device_info (text, nullable)
+  created_at
+
+Add appropriate indexes on foreign keys, items.status, items.deadline_at, dropping_areas.status, and a unique index on items.product_code so codes can't collide.
+
+4. Handling Fee Logic (business rule — implement server-side, not just on-device)
+Every item has a base_handling_fee set at creation.
+If now() > deadline_at and the item is not yet dropped/sold, apply late_handling_fee on top of the base fee.
+The fee actually charged to the buyer is locked in on the transactions row at time of purchase (never recalculated retroactively).
+Run a scheduled Supabase Edge Function (cron) that periodically flags overdue items and updates their effective fee/status, and pushes a notification when a fee increases.
+5. Core User Flows
+
+A. Registration
+
+Two sign-up options on the same screen: "Continue with Google" (Supabase Google OAuth) and local email/password signup.
+For local accounts, email verification is OFF by default for this build (fastest path to a working demo). Keep the verification toggle easy to find in Supabase Auth settings so it can be switched on later without code changes.
+Google sign-ups are inherently verified, so no extra step is needed for that path.
+After either sign-up method succeeds, create a matching row in the users table (via a Supabase trigger on auth.users insert) and land the user on the Home tab by default.
+Prompt for push notification permission right after onboarding (with a clear explanation of why, not a blind OS prompt).
+A "Become a Seller" flow creates a seller_profiles row.
+
+B. Seller — List an Item
+
+Seller can only select a dropping area they have an approved partnership with (see Section 5C). A seller with no approved partnerships sees a prompt to request one first — they cannot list an item at a hub they haven't been confirmed for.
+Seller has full control over every detail of the item being dropped, entered on the item form:
+Name/title of the item
+Description
+Product code (auto-suggested unique code, but the seller can override it)
+Image (camera capture or gallery pick via expo-image-picker)
+Buyer name (optional — fill in if this item is already earmarked for a specific buyer)
+Amount (the agreed sale amount for this item)
+Deadline (date/time picker — when the item must be picked up before the late fee kicks in)
+Base handling fee
+Late/increased handling fee (added on top of the base fee if the deadline is exceeded)
+Item is created with status pending_dropoff. The product code is validated as unique before submission (on-device check + server-side unique constraint as the source of truth).
+Seller physically drops the item at the hub; the Dropping Area Admin marks it dropped (sets dropped_at) from their own app view, which triggers a push notification to interested/watching buyers and updates the listing in real time.
+
+C. Seller — Partner with a Dropping Area
+
+Partnership is never automatic. A seller cannot list items at a dropping area just by requesting it — the dropping area's admin must explicitly confirm the partnership first.
+Seller browses the list of dropping areas and sends a partnership request, created with status pending.
+Dropping Area Admin reviews the request in their hub view and explicitly approves or rejects it. Only approved status unlocks item listing at that hub for that seller.
+Enforce this at the database level, not just in the app: the RLS policy / insert check on items must verify a matching seller_dropping_area_partnerships row with status = 'approved' exists before allowing an item to be created for that seller/dropping-area pair.
+Approved partnerships appear on both the seller's public profile and the dropping area's page ("Partner Sellers"). Pending or rejected requests are only visible to the seller who made them and the relevant hub admin — never public.
+
+D. Buyer — Browse & Track
+
+Buyer views a directory of dropping areas (map centered on Baguio City + list, using lat/long).
+Selecting a dropping area shows: partner sellers, and all items currently listed there with status badges (pending_dropoff / dropped / sold).
+Each item card shows: photo, title, product code, amount, current total (amount + applicable handling fee), time since dropped (or "not yet dropped"), and countdown/expiry for the deadline. If an item has a buyer_name assigned, only that buyer (matched to their account) and the hub admin should see it flagged as "reserved for you" — other buyers just see the item as unavailable/reserved, not who it's reserved for.
+Buyer can reserve/purchase an item once status is dropped.
+On purchase, a transactions row is created and a push notification + in-app notification confirms status, amount, and pickup location.
+
+E. Notifications
+
+Push notifications (Expo Notifications) for: item dropped, deadline passed / fee increased, purchase confirmed.
+Persistent in-app notification center (bell icon on Home) mirrors the same events for anyone who missed the push or has notifications disabled.
+6. App Navigation / Screens
+
+Bottom tab navigation (4–5 tabs) with stack navigators inside each for detail screens:
+
+Tab: Home
+  - Home screen: features registered dropping areas directly — a card for each 
+    active dropping area with name, address, and a preview of its partner sellers, 
+    visible without requiring login so first-time users can see what's live in 
+    Baguio before signing up.
+  - Dropping Area Detail screen → partner sellers + items + status
+  - Item Detail screen → amount + fee breakdown, deadline, dropped status, 
+    reserve/purchase action
+
+Tab: Dropping Areas
+  - Map + list view of all active dropping areas in Baguio, searchable
+
+Tab: Sell (visible once user has a seller profile; otherwise shows "Become a Seller" CTA)
+  - Seller dashboard: item list with statuses, product codes, quick actions
+  - New Item screen (the full form from Section 5B)
+  - Partnerships screen: request/track partnership status with dropping areas
+
+Tab: Notifications
+  - Chronological list, unread highlighted, icon per notification type
+
+Tab: Profile
+  - Account details, purchase history, seller profile toggle, settings, logout
+
+Separate (not in tab bar, role-gated):
+  - Hub Admin view (for users who manage a dropping area): mark items dropped, 
+    review/approve partnership requests
+  - Super Admin view: approve new dropping areas, platform oversight
+
+Home screen requirement: this is not a generic splash/hero screen — it must directly feature the registered dropping areas so a first-time visitor immediately sees which hubs are live in Baguio and who sells through them, ideally before being forced to log in. Tapping a dropping area card goes to its detail screen for the full list of items and partner sellers.
+
+7. Security Requirements (must implement, not optional)
+Row Level Security (RLS) enabled on every Supabase table — buyers can only see public/approved data; sellers can only edit their own items; hub admins can only manage their own dropping area; super admin has elevated policy.
+Server-side validation of all fee calculations and status transitions (never trust client-submitted totals) — use Postgres functions/Edge Functions, not just on-device checks.
+Zod schema validation on every form before it hits the API.
+Auth guards on all protected screens (redirect unauthenticated users to login).
+Role-based access control checked both in the UI (hide actions) and in RLS policies (enforce actual access).
+Partnership gating is a hard requirement, not a UI suggestion: the database must reject any items insert where the seller doesn't have an approved row in seller_dropping_area_partnerships for that dropping area — enforce via RLS policy and/or a BEFORE INSERT trigger.
+Session tokens stored via expo-secure-store, never plain AsyncStorage, so credentials aren't readable if the device is compromised.
+Store only minimal PII; never expose other users' emails/phone numbers publicly — only show what's needed (e.g., seller business name, not personal email).
+items.buyer_name is sensitive — restrict visibility via RLS so only the seller who created the item, the assigned buyer (if matched to an account), and the relevant dropping area admin can read it. Public/browsing views should only show "reserved" status, never the name.
+Sanitize all user-generated text (titles, descriptions) before render to prevent injection issues.
+Rate-limit item creation and partnership requests (basic abuse prevention) via Edge Function checks.
+Use HTTPS-only Supabase URLs and never bundle the Supabase service role key into the app — only the anon key with RLS enforcing restrictions.
+Request only the device permissions actually needed (camera, photo library, push notifications, location for the map) and explain each one in-context before the OS prompt fires.
+Note: email verification is disabled for local accounts in this build to speed up demo/testing. Acceptable for a school project; re-enable verification before handling real transactions or real money.
+8. Project Structure
+src/
+  components/
+    ui/              (buttons, cards, badges, modals — reusable)
+    items/
+    dropping-areas/
+    notifications/
+  features/
+    auth/
+    seller/
+    hub-admin/
+    admin/
+  navigation/
+    RootNavigator.tsx
+    TabNavigator.tsx
+  hooks/
+  lib/
+    supabaseClient.ts
+    feeCalculations.ts
+    pushNotifications.ts
+  screens/
+  types/
+  utils/
+9. UI/Design Direction
+Clean, professional marketplace feel — a hybrid of a logistics tracking app and an e-commerce listing app, built to feel native (not a repainted website).
+Status badges with clear color coding: gray = pending dropoff, blue = dropped, green = sold, red = expired/late fee applied.
+Thumb-reachable primary actions (bottom of screen), respect safe areas on notch/gesture-bar devices.
+Pull-to-refresh on all list screens; skeleton loaders and empty states for every data-driven view.
+Bottom sheet modals for quick actions (e.g., confirming a purchase) instead of full-screen takeovers where possible.
+10. Seed Data
+
+Include seed/mock data using real Baguio City locations for realism: 3 dropping areas (e.g., a Session Road area hub, an Upper Session/SM Baguio vicinity hub, and a Burnham Park area hub — adjust to whichever real Baguio landmarks you use), 3 seller profiles, 8–10 items across different statuses (including at least one overdue item showing the late fee applied, and at least one item with a buyer_name pre-assigned to show the "reserved" state), each with a unique product code and amount, and sample notifications, so the app is demo-ready immediately after generation.
