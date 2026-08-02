@@ -15,9 +15,11 @@ import {
   MOCK_ITEMS,
   MOCK_TRANSACTIONS,
   MOCK_NOTIFICATIONS,
+  MOCK_USERS,
 } from '@/lib/mockData';
 import { Storage, STORAGE_KEYS } from '@/lib/storage';
 import { snapshotFeeAtPurchase } from '@/lib/feeCalculations';
+import { sendLocalNotification, sendExpoPushNotification } from '@/lib/pushNotifications';
 import { useAuth } from './AuthContext';
 
 interface AppContextValue {
@@ -53,6 +55,49 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
+// ─── Helpers ───────────────────────────────────────────────────────────────
+function makeNotif(
+  userId: string,
+  type: AppNotification['type'],
+  title: string,
+  message: string,
+  relatedItemId?: string
+): AppNotification {
+  return {
+    id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    user_id: userId,
+    type,
+    title,
+    message,
+    related_item_id: relatedItemId,
+    is_read: false,
+    created_at: new Date().toISOString(),
+  };
+}
+
+/** Look up a mock user's push token by their user id. */
+function getPushTokenForUser(userId: string): string | undefined {
+  const user = MOCK_USERS.find((u) => u.id === userId);
+  return (user as { expoPushToken?: string })?.expoPushToken;
+}
+
+/** Fire both a local (same-device) notification and a remote Expo push if a token is available. */
+async function fireNotification(opts: {
+  userId: string;
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+}) {
+  // Always send a local notification so it surfaces in the current device's tray
+  await sendLocalNotification({ title: opts.title, body: opts.body, data: opts.data });
+  // Also attempt remote push if we have the recipient's token (ready for multi-device)
+  const token = getPushTokenForUser(opts.userId);
+  if (token) {
+    await sendExpoPushNotification({ to: token, title: opts.title, body: opts.body, data: opts.data });
+  }
+}
+
+// ─── Provider ──────────────────────────────────────────────────────────────
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const { currentUser, updateUser } = useAuth();
 
@@ -95,7 +140,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadData();
   }, [loadData]);
 
-  // ─── Derived helpers ──────────────────────────────────────────────────────
+  // ─── Derived helpers ───────────────────────────────────────────────────
   const getSellerById = useCallback(
     (sellerId: string) => sellerProfiles.find((s) => s.id === sellerId),
     [sellerProfiles]
@@ -147,7 +192,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [notifications, currentUser]
   );
 
-  // ─── Actions ──────────────────────────────────────────────────────────────
+  // ─── Actions ──────────────────────────────────────────────────────────
   const refreshData = useCallback(() => loadData(), [loadData]);
 
   const purchaseItem = useCallback(
@@ -170,20 +215,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         created_at: new Date().toISOString(),
       };
 
-      const updatedItems = items.map((i) => (i.id === itemId ? { ...i, status: 'sold' as const } : i));
+      const updatedItems = items.map((i) =>
+        i.id === itemId ? { ...i, status: 'sold' as const } : i
+      );
       const updatedTxns = [...transactions, txn];
 
-      const notif: AppNotification = {
-        id: `notif-${Date.now()}`,
-        user_id: currentUser.id,
-        type: 'purchase_confirmed',
-        title: 'Purchase Confirmed',
-        message: `Your purchase of ${item.title} is confirmed. Pick up at the hub.`,
-        related_item_id: itemId,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      };
-      const updatedNotifs = [...notifications, notif];
+      // In-app notification for buyer (purchase confirmed)
+      const buyerNotif = makeNotif(
+        currentUser.id,
+        'purchase_confirmed',
+        'Purchase Confirmed ✓',
+        `Your purchase of "${item.title}" is confirmed. Head to the hub to pick it up.`,
+        itemId
+      );
+
+      // In-app notification for seller (item sold)
+      const sellerProfile = sellerProfiles.find((s) => s.id === item.seller_id);
+      const sellerUserId = sellerProfile?.user_id;
+      const newNotifs: AppNotification[] = [buyerNotif];
+
+      if (sellerUserId) {
+        newNotifs.push(
+          makeNotif(
+            sellerUserId,
+            'item_sold',
+            'Item Sold 🎉',
+            `"${item.title}" (${item.product_code}) was purchased by a buyer.`,
+            itemId
+          )
+        );
+      }
+
+      const updatedNotifs = [...notifications, ...newNotifs];
 
       setItems(updatedItems);
       setTransactions(updatedTxns);
@@ -193,9 +256,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await Storage.set(STORAGE_KEYS.TRANSACTIONS, updatedTxns);
       await Storage.set(STORAGE_KEYS.NOTIFICATIONS, updatedNotifs);
 
+      // Push: buyer gets local confirmation; seller gets local + remote
+      await fireNotification({
+        userId: currentUser.id,
+        title: 'Purchase Confirmed ✓',
+        body: `"${item.title}" is yours! Pick up at the hub.`,
+        data: { itemId, screen: 'item' },
+      });
+
+      if (sellerUserId) {
+        await fireNotification({
+          userId: sellerUserId,
+          title: 'Item Sold 🎉',
+          body: `"${item.title}" was just purchased.`,
+          data: { itemId, screen: 'item' },
+        });
+      }
+
       return txn;
     },
-    [items, transactions, notifications, currentUser]
+    [items, transactions, notifications, sellerProfiles, currentUser]
   );
 
   const createItem = useCallback(
@@ -231,30 +311,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const markItemDropped = useCallback(
     (itemId: string) => {
+      const item = items.find((i) => i.id === itemId);
+      if (!item) return;
+
       const updated = items.map((i) =>
-        i.id === itemId ? { ...i, status: 'dropped' as const, dropped_at: new Date().toISOString() } : i
+        i.id === itemId
+          ? { ...i, status: 'dropped' as const, dropped_at: new Date().toISOString() }
+          : i
       );
       setItems(updated);
       Storage.set(STORAGE_KEYS.ITEMS, updated);
 
-      const item = items.find((i) => i.id === itemId);
-      if (item) {
-        const notif: AppNotification = {
-          id: `notif-${Date.now()}`,
-          user_id: item.buyer_name ? 'user-buyer-1' : item.seller_id,
-          type: 'item_dropped',
-          title: 'Item Ready for Pickup',
-          message: `${item.title} (${item.product_code}) has arrived at the hub.`,
-          related_item_id: itemId,
-          is_read: false,
-          created_at: new Date().toISOString(),
-        };
+      // Find the seller's user id (not the seller profile id)
+      const sellerProfile = sellerProfiles.find((s) => s.id === item.seller_id);
+      const sellerUserId = sellerProfile?.user_id;
+
+      if (sellerUserId) {
+        const notif = makeNotif(
+          sellerUserId,
+          'item_dropped',
+          'Item Arrived at Hub 📦',
+          `"${item.title}" (${item.product_code}) has been received and is ready for pickup.`,
+          itemId
+        );
         const updatedNotifs = [...notifications, notif];
         setNotifications(updatedNotifs);
         Storage.set(STORAGE_KEYS.NOTIFICATIONS, updatedNotifs);
+
+        // Push to seller
+        fireNotification({
+          userId: sellerUserId,
+          title: 'Item Arrived at Hub 📦',
+          body: `"${item.title}" is ready for buyers to purchase.`,
+          data: { itemId, screen: 'item' },
+        });
       }
     },
-    [items, notifications]
+    [items, notifications, sellerProfiles]
   );
 
   const requestPartnership = useCallback(
@@ -281,6 +374,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const approvePartnership = useCallback(
     (partnershipId: string) => {
+      const partnership = partnerships.find((p) => p.id === partnershipId);
       const updated = partnerships.map((p) =>
         p.id === partnershipId
           ? { ...p, status: 'approved' as const, approved_at: new Date().toISOString() }
@@ -288,19 +382,70 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       );
       setPartnerships(updated);
       Storage.set(STORAGE_KEYS.PARTNERSHIPS, updated);
+
+      if (partnership) {
+        const sellerProfile = sellerProfiles.find((s) => s.id === partnership.seller_id);
+        const sellerUserId = sellerProfile?.user_id;
+        const area = droppingAreas.find((a) => a.id === partnership.dropping_area_id);
+
+        if (sellerUserId) {
+          const notif = makeNotif(
+            sellerUserId,
+            'partnership_approved',
+            'Partnership Approved ✓',
+            `Your partnership with "${area?.name ?? 'the hub'}" has been approved. You can now list items there.`
+          );
+          const updatedNotifs = [...notifications, notif];
+          setNotifications(updatedNotifs);
+          Storage.set(STORAGE_KEYS.NOTIFICATIONS, updatedNotifs);
+
+          fireNotification({
+            userId: sellerUserId,
+            title: 'Partnership Approved ✓',
+            body: `You can now list items at ${area?.name ?? 'the hub'}.`,
+            data: { screen: 'partnerships' },
+          });
+        }
+      }
     },
-    [partnerships]
+    [partnerships, sellerProfiles, droppingAreas, notifications]
   );
 
   const rejectPartnership = useCallback(
     (partnershipId: string) => {
+      const partnership = partnerships.find((p) => p.id === partnershipId);
       const updated = partnerships.map((p) =>
         p.id === partnershipId ? { ...p, status: 'rejected' as const } : p
       );
       setPartnerships(updated);
       Storage.set(STORAGE_KEYS.PARTNERSHIPS, updated);
+
+      if (partnership) {
+        const sellerProfile = sellerProfiles.find((s) => s.id === partnership.seller_id);
+        const sellerUserId = sellerProfile?.user_id;
+        const area = droppingAreas.find((a) => a.id === partnership.dropping_area_id);
+
+        if (sellerUserId) {
+          const notif = makeNotif(
+            sellerUserId,
+            'partnership_rejected',
+            'Partnership Not Approved',
+            `Your request to partner with "${area?.name ?? 'the hub'}" was not approved.`
+          );
+          const updatedNotifs = [...notifications, notif];
+          setNotifications(updatedNotifs);
+          Storage.set(STORAGE_KEYS.NOTIFICATIONS, updatedNotifs);
+
+          fireNotification({
+            userId: sellerUserId,
+            title: 'Partnership Not Approved',
+            body: `Your request with ${area?.name ?? 'the hub'} was declined.`,
+            data: { screen: 'partnerships' },
+          });
+        }
+      }
     },
-    [partnerships]
+    [partnerships, sellerProfiles, droppingAreas, notifications]
   );
 
   const markNotificationRead = useCallback(

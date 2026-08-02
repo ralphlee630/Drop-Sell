@@ -47,4 +47,6 @@ export const STORAGE_KEYS = {
   NOTIFICATIONS: 'notifications',
   PARTNERSHIPS: 'partnerships',
   SEEDED: 'seeded',
+  PUSH_TOKEN: 'push_token',
+  NOTIF_PREFS: 'notif_prefs',
 } as const;

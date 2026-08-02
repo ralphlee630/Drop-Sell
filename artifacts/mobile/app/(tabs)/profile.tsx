@@ -169,6 +169,11 @@ export default function ProfileScreen() {
         {myProfile && (
           <MenuItem icon="link" label="Manage Partnerships" onPress={() => router.push('/sell/partnerships')} />
         )}
+        <MenuItem
+          icon="bell"
+          label="Notification Settings"
+          onPress={() => router.push('/settings/notifications')}
+        />
         <MenuItem icon="log-out" label="Sign Out" onPress={logout} danger />
       </View>
     </ScrollView>

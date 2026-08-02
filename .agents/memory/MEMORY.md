@@ -1,0 +1,2 @@
+- [react-native-maps web stub](rn-maps-web-stub.md) — react-native-maps must never be imported directly on web; use a platform-specific component pair (.tsx / .web.tsx)
+- [expo-notifications version pin](expo-notifications-pin.md) — expo-notifications and expo-device must be pinned to Expo SDK 54 expected versions (~0.32.x / ~8.0.x), not latest

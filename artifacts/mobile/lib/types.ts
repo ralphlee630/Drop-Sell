@@ -3,7 +3,14 @@ export type ItemStatus = 'pending_dropoff' | 'dropped' | 'sold' | 'expired' | 'c
 export type PartnershipStatus = 'pending' | 'approved' | 'rejected' | 'terminated';
 export type DroppingAreaStatus = 'pending_approval' | 'active' | 'suspended';
 export type TransactionStatus = 'reserved' | 'paid' | 'completed' | 'cancelled';
-export type NotificationType = 'item_dropped' | 'deadline_passed' | 'fee_updated' | 'purchase_confirmed';
+export type NotificationType =
+  | 'item_dropped'
+  | 'item_sold'
+  | 'deadline_passed'
+  | 'fee_updated'
+  | 'purchase_confirmed'
+  | 'partnership_approved'
+  | 'partnership_rejected';
 
 export interface User {
   id: string;
@@ -12,6 +19,7 @@ export interface User {
   phone?: string;
   is_seller: boolean;
   role: UserRole;
+  expoPushToken?: string;
   created_at: string;
 }
 

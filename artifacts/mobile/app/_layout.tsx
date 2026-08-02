@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -11,7 +11,8 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from '@/context/AuthContext';
 import { AppProvider } from '@/context/AppContext';
@@ -21,6 +22,36 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  const notificationListener = useRef<Notifications.EventSubscription | null>(null);
+  const responseListener = useRef<Notifications.EventSubscription | null>(null);
+
+  useEffect(() => {
+    // Listen for notifications received while app is open (foreground)
+    notificationListener.current = Notifications.addNotificationReceivedListener(() => {
+      // In-app notification bell badge is updated via AppContext notifications state;
+      // no extra action needed here.
+    });
+
+    // Handle taps on notifications (foreground, background, killed)
+    responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as Record<string, string> | undefined;
+      if (!data) return;
+
+      if (data.screen === 'item' && data.itemId) {
+        router.push(`/item/${data.itemId}`);
+      } else if (data.screen === 'partnerships') {
+        router.push('/sell/partnerships');
+      } else {
+        router.push('/(tabs)/notifications');
+      }
+    });
+
+    return () => {
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
+    };
+  }, []);
+
   return (
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -48,6 +79,10 @@ function RootLayoutNav() {
       <Stack.Screen
         name="admin/index"
         options={{ title: 'Admin Dashboard', headerBackTitle: 'Back' }}
+      />
+      <Stack.Screen
+        name="settings/notifications"
+        options={{ title: 'Notification Settings', headerBackTitle: 'Back' }}
       />
     </Stack>
   );
