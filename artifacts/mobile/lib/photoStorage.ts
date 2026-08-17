@@ -9,7 +9,7 @@
  * upload call and return the remote URL instead.
  */
 
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 

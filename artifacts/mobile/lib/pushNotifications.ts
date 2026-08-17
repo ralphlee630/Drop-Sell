@@ -17,6 +17,8 @@ import { Platform } from 'react-native';
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
@@ -50,7 +52,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 
     const projectId =
       Constants.expoConfig?.extra?.eas?.projectId ??
-      (Constants as Record<string, unknown>)?.easConfig?.projectId as string | undefined;
+      (Constants as unknown as { easConfig?: { projectId?: string } }).easConfig?.projectId;
 
     const tokenResult = projectId
       ? await Notifications.getExpoPushTokenAsync({ projectId })

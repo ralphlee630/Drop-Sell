@@ -56,10 +56,12 @@
     "zod-validation-error": "^3.4.0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
     "expo-device": "^8.0.10",
     "expo-file-system": "^19.0.23",
     "expo-image-manipulator": "^14.0.8",
     "expo-notifications": "^0.32.17",
-    "react-native-maps": "1.18.0"
+    "react-native-maps": "1.18.0",
+    "react-native-url-polyfill": "^4.0.0"
   }
 }

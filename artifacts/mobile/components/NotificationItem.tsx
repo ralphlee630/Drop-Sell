@@ -8,9 +8,12 @@ import type { AppNotification, NotificationType } from '@/lib/types';
 
 const TYPE_CONFIG: Record<NotificationType, { icon: keyof typeof Feather.glyphMap; colorKey: string }> = {
   item_dropped:       { icon: 'package', colorKey: 'statusDropped' },
+  item_sold:          { icon: 'shopping-bag', colorKey: 'statusSold' },
   deadline_passed:    { icon: 'clock', colorKey: 'statusExpired' },
   fee_updated:        { icon: 'alert-circle', colorKey: 'partnerPending' },
   purchase_confirmed: { icon: 'check-circle', colorKey: 'statusSold' },
+  partnership_approved: { icon: 'link', colorKey: 'partnerApproved' },
+  partnership_rejected: { icon: 'link', colorKey: 'partnerRejected' },
 };
 
 interface Props {
@@ -21,7 +24,7 @@ export function NotificationItem({ notification }: Props) {
   const colors = useColors();
   const { markNotificationRead } = useApp();
   const config = TYPE_CONFIG[notification.type];
-  const iconColor = (colors as Record<string, string>)[config.colorKey] ?? colors.primary;
+  const iconColor = (colors as unknown as Record<string, string>)[config.colorKey] ?? colors.primary;
 
   return (
     <TouchableOpacity

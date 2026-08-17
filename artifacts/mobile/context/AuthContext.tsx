@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { User } from '@/lib/types';
-import { DEMO_PASSWORDS, MOCK_USERS } from '@/lib/mockData';
 import { Storage, STORAGE_KEYS } from '@/lib/storage';
 import { registerForPushNotificationsAsync } from '@/lib/pushNotifications';
+import { supabase, type ProfileRow } from '@/lib/supabase';
 
 interface AuthContextValue {
   currentUser: User | null;
@@ -16,86 +16,170 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+function profileToUser(profile: ProfileRow): User {
+  return {
+    id: profile.id,
+    full_name: profile.full_name,
+    email: profile.email,
+    phone: profile.phone ?? undefined,
+    is_seller: profile.is_seller,
+    role: profile.role,
+    expoPushToken: profile.expo_push_token ?? undefined,
+    created_at: profile.created_at,
+  };
+}
+
+async function loadOrCreateProfile(authUser: {
+  id: string;
+  email?: string;
+  user_metadata?: Record<string, unknown>;
+}): Promise<User> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', authUser.id)
+    .maybeSingle();
+
+  if (error) throw new Error(`Could not load your profile: ${error.message}`);
+  if (data) return profileToUser(data as ProfileRow);
+
+  const fullName =
+    typeof authUser.user_metadata?.full_name === 'string'
+      ? authUser.user_metadata.full_name
+      : authUser.email?.split('@')[0] ?? 'Drop & Sell user';
+
+  const { data: created, error: createError } = await supabase
+    .from('profiles')
+    .insert({
+      id: authUser.id,
+      full_name: fullName,
+      email: authUser.email ?? '',
+      is_seller: false,
+      role: 'buyer',
+    })
+    .select('*')
+    .single();
+
+  if (createError) throw new Error(`Could not create your profile: ${createError.message}`);
+  return profileToUser(created as ProfileRow);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Restore session on mount
-  useEffect(() => {
-    Storage.get<User>(STORAGE_KEYS.SESSION).then((user) => {
-      if (user) setCurrentUser(user);
-      setIsLoading(false);
-    });
-  }, []);
-
-  /** Register (or reuse cached) Expo push token and attach it to the user object. */
   const attachPushToken = useCallback(async (user: User): Promise<User> => {
-    // Check for a cached token first to avoid repeated permission prompts
     const cached = await Storage.get<string>(STORAGE_KEYS.PUSH_TOKEN);
-    if (cached) {
-      const withToken = { ...user, expoPushToken: cached };
-      await Storage.set(STORAGE_KEYS.SESSION, withToken);
-      return withToken;
-    }
+    const token = cached ?? (await registerForPushNotificationsAsync());
+    if (!token || token === user.expoPushToken) return user;
 
-    const token = await registerForPushNotificationsAsync();
-    if (token) {
-      await Storage.set(STORAGE_KEYS.PUSH_TOKEN, token);
-      const withToken = { ...user, expoPushToken: token };
-      await Storage.set(STORAGE_KEYS.SESSION, withToken);
-      return withToken;
+    await Storage.set(STORAGE_KEYS.PUSH_TOKEN, token);
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ expo_push_token: token })
+      .eq('id', user.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      // Push registration should not prevent authentication.
+      console.warn('Could not save push token:', error.message);
+      return user;
     }
-    return user;
+    return profileToUser(data as ProfileRow);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const hydrate = async (sessionUser: { id: string; email?: string; user_metadata?: Record<string, unknown> } | null) => {
+      if (!sessionUser) {
+        if (active) {
+          setCurrentUser(null);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const profile = await loadOrCreateProfile(sessionUser);
+        const withPushToken = await attachPushToken(profile);
+        if (active) setCurrentUser(withPushToken);
+      } catch (error) {
+        console.error(error);
+        if (active) setCurrentUser(null);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      void hydrate(session?.user ?? null);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Supabase recommends deferring database work outside this callback.
+      setTimeout(() => void hydrate(session?.user ?? null), 0);
+    });
+
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [attachPushToken]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const expectedPassword = DEMO_PASSWORDS[normalizedEmail];
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error('Supabase did not return a user session');
 
-    if (!expectedPassword || expectedPassword !== password) {
-      throw new Error('Invalid email or password. Try buyer@demo.com / password');
-    }
-
-    const user = MOCK_USERS.find((u) => u.email === normalizedEmail);
-    if (!user) throw new Error('User not found');
-
-    const userWithToken = await attachPushToken(user);
-    setCurrentUser(userWithToken);
-    await Storage.set(STORAGE_KEYS.SESSION, userWithToken);
+    const profile = await loadOrCreateProfile(data.user);
+    setCurrentUser(await attachPushToken(profile));
   }, [attachPushToken]);
 
   const register = useCallback(async (email: string, password: string, fullName: string) => {
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (DEMO_PASSWORDS[normalizedEmail]) {
-      throw new Error('An account with this email already exists');
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim().toLowerCase(),
+      password,
+      options: { data: { full_name: fullName.trim() } },
+    });
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error('Supabase did not create the account');
+    if (!data.session) {
+      throw new Error('Account created. Check your email to verify it, then sign in.');
     }
 
-    const newUser: User = {
-      id: `user-${Date.now()}`,
-      full_name: fullName,
-      email: normalizedEmail,
-      is_seller: false,
-      role: 'buyer',
-      created_at: new Date().toISOString(),
-    };
-
-    const userWithToken = await attachPushToken(newUser);
-    setCurrentUser(userWithToken);
-    await Storage.set(STORAGE_KEYS.SESSION, userWithToken);
+    const profile = await loadOrCreateProfile(data.user);
+    setCurrentUser(await attachPushToken(profile));
   }, [attachPushToken]);
 
   const logout = useCallback(async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw new Error(error.message);
     setCurrentUser(null);
-    await Storage.remove(STORAGE_KEYS.SESSION);
-    // Keep the push token cached so it can be reused on next login
   }, []);
 
   const updateUser = useCallback((updates: Partial<User>) => {
-    setCurrentUser((prev) => {
-      if (!prev) return prev;
-      const updated = { ...prev, ...updates };
-      Storage.set(STORAGE_KEYS.SESSION, updated);
+    setCurrentUser((previous) => {
+      if (!previous) return previous;
+
+      const updated = { ...previous, ...updates };
+      void supabase
+        .from('profiles')
+        .update({
+          full_name: updated.full_name,
+          phone: updated.phone ?? null,
+          is_seller: updated.is_seller,
+          role: updated.role,
+          expo_push_token: updated.expoPushToken ?? null,
+        })
+        .eq('id', updated.id)
+        .then(({ error }) => {
+          if (error) console.error('Could not update profile:', error.message);
+        });
       return updated;
     });
   }, []);

@@ -1,9 +1,9 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
-import type { ItemStatus, PartnershipStatus, DroppingAreaStatus } from '@/lib/types';
+import type { ItemStatus, PartnershipStatus, DroppingAreaStatus, TransactionStatus } from '@/lib/types';
 
-type BadgeStatus = ItemStatus | PartnershipStatus | DroppingAreaStatus;
+type BadgeStatus = ItemStatus | PartnershipStatus | DroppingAreaStatus | TransactionStatus;
 
 interface Props {
   status: BadgeStatus;
@@ -24,6 +24,9 @@ function getConfig(status: BadgeStatus, colors: ReturnType<typeof useColors>) {
     case 'active':          return { label: 'Active', color: '#fff', bg: colors.statusSold };
     case 'suspended':       return { label: 'Suspended', color: '#fff', bg: colors.statusExpired };
     case 'pending_approval':return { label: 'Pending Approval', color: colors.partnerPending, bg: colors.partnerPendingBg };
+    case 'reserved':        return { label: 'Reserved', color: colors.partnerPending, bg: colors.partnerPendingBg };
+    case 'paid':            return { label: 'Paid', color: '#fff', bg: colors.statusDropped };
+    case 'completed':       return { label: 'Completed', color: '#fff', bg: colors.statusSold };
     default:                return { label: String(status), color: colors.mutedForeground, bg: colors.muted };
   }
 }

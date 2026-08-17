@@ -23,7 +23,7 @@ export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { isAuthenticated } = useAuth();
-  const { droppingAreas, items, sellerProfiles, getUnreadCount, isLoading, refreshData } = useApp();
+  const { droppingAreas, items, sellerProfiles, getUnreadCount, isLoading, dataError, refreshData } = useApp();
   const [search, setSearch] = useState('');
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
@@ -151,6 +151,12 @@ export default function HomeScreen() {
               <CardSkeleton />
               <CardSkeleton />
             </View>
+          ) : dataError ? (
+            <EmptyState
+              icon="database"
+              title="Finish Supabase setup"
+              subtitle="Run artifacts/mobile/supabase/schema.sql in your Supabase SQL Editor, then pull to refresh."
+            />
           ) : (
             <EmptyState
               icon="map-pin"
