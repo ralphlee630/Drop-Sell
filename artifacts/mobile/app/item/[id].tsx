@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -73,10 +74,23 @@ export default function ItemDetailScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Photo */}
-        <View style={[styles.photoArea, { backgroundColor: colors.muted }]}>
-          <Feather name="image" size={48} color={colors.mutedForeground} />
-          <Text style={[styles.noPhotoText, { color: colors.mutedForeground }]}>No photo provided</Text>
-        </View>
+        {item.photo_url ? (
+          <Image
+            source={{ uri: item.photo_url }}
+            style={styles.photoImage}
+            contentFit="cover"
+            transition={300}
+            placeholder={{ blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' }}
+            cachePolicy="memory-disk"
+          />
+        ) : (
+          <View style={[styles.photoArea, { backgroundColor: colors.muted }]}>
+            <View style={[styles.noPhotoIcon, { backgroundColor: colors.secondary }]}>
+              <Feather name="image" size={28} color={colors.primary} />
+            </View>
+            <Text style={[styles.noPhotoText, { color: colors.mutedForeground }]}>No photo provided</Text>
+          </View>
+        )}
 
         <View style={styles.content}>
           {/* Status + title */}
@@ -264,7 +278,9 @@ export default function ItemDetailScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  photoImage: { width: '100%', height: 280 },
   photoArea: { height: 240, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  noPhotoIcon: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   noPhotoText: { fontSize: 13, fontFamily: 'Inter_400Regular' },
   content: { padding: 16, gap: 14 },
   titleRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },

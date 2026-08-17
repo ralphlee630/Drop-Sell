@@ -1,11 +1,11 @@
 import React from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { StatusBadge } from './StatusBadge';
-import { formatPeso, formatDeadlineCountdown, timeAgo } from '@/lib/feeCalculations';
-import { calculateCurrentFee } from '@/lib/feeCalculations';
+import { formatPeso, formatDeadlineCountdown, timeAgo, calculateCurrentFee } from '@/lib/feeCalculations';
 import type { Item } from '@/lib/types';
 
 interface Props {
@@ -15,12 +15,14 @@ interface Props {
   areaName?: string;
 }
 
+// Neutral blurhash placeholder – shows while image loads
+const PHOTO_BLURHASH = 'L6PZfSi_.AyE_3t7t7R**0o#DgR4';
+
 export function ItemCard({ item, sellerName, showArea, areaName }: Props) {
   const colors = useColors();
   const { label: deadlineLabel, isOverdue, isUrgent } = formatDeadlineCountdown(item.deadline_at);
   const fee = calculateCurrentFee(item);
   const total = item.amount + fee;
-
   const deadlineColor = isOverdue ? colors.statusExpired : isUrgent ? colors.partnerPending : colors.mutedForeground;
 
   return (
@@ -30,10 +32,17 @@ export function ItemCard({ item, sellerName, showArea, areaName }: Props) {
       activeOpacity={0.85}
     >
       <View style={styles.row}>
-        {/* Photo placeholder */}
-        <View style={[styles.photo, { backgroundColor: colors.muted }]}>
+        {/* Photo thumbnail */}
+        <View style={[styles.photoWrap, { backgroundColor: colors.muted }]}>
           {item.photo_url ? (
-            <Image source={{ uri: item.photo_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            <Image
+              source={{ uri: item.photo_url }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              transition={300}
+              placeholder={{ blurhash: PHOTO_BLURHASH }}
+              cachePolicy="memory-disk"
+            />
           ) : (
             <Feather name="image" size={22} color={colors.mutedForeground} />
           )}
@@ -41,7 +50,9 @@ export function ItemCard({ item, sellerName, showArea, areaName }: Props) {
 
         <View style={styles.info}>
           <View style={styles.topRow}>
-            <Text style={[styles.title, { color: colors.foreground }]} numberOfLines={2}>{item.title}</Text>
+            <Text style={[styles.title, { color: colors.foreground }]} numberOfLines={2}>
+              {item.title}
+            </Text>
             <StatusBadge status={item.status} size="sm" />
           </View>
 
@@ -99,21 +110,12 @@ export function ItemCard({ item, sellerName, showArea, areaName }: Props) {
 }
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 10,
-    overflow: 'hidden',
-  },
+  card: { borderRadius: 14, borderWidth: 1, marginBottom: 10, overflow: 'hidden' },
   row: { flexDirection: 'row', padding: 12, gap: 12 },
-  photo: {
-    width: 80,
-    height: 80,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    flexShrink: 0,
+  photoWrap: {
+    width: 80, height: 80, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    overflow: 'hidden', flexShrink: 0,
   },
   info: { flex: 1 },
   topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 4 },
@@ -127,13 +129,8 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center' },
   metaText: { fontSize: 11, fontFamily: 'Inter_400Regular' },
   reservedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginTop: 4,
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
+    borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4,
   },
   reservedText: { fontSize: 10, fontFamily: 'Inter_500Medium' },
 });

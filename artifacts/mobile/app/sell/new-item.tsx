@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { persistPhoto, deletePhoto } from '@/lib/photoStorage';
 
 function generateProductCode(): string {
   const suffix = Date.now().toString().slice(-4);
@@ -43,6 +44,7 @@ export default function NewItemScreen() {
   const [lateFee, setLateFee] = useState('');
   const [areaId, setAreaId] = useState(approvedAreas[0]?.id ?? '');
   const [photoUri, setPhotoUri] = useState<string | undefined>();
+  const [photoProcessing, setPhotoProcessing] = useState(false);
   const [deadline, setDeadline] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
@@ -59,16 +61,34 @@ export default function NewItemScreen() {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      Alert.alert('Permission needed', 'Please allow access to your photo library in Settings.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 1, // we compress ourselves via expo-image-manipulator
     });
-    if (!result.canceled) setPhotoUri(result.assets[0].uri);
+    if (result.canceled) return;
+
+    setPhotoProcessing(true);
+    try {
+      // Delete previous photo if one was already selected
+      if (photoUri) await deletePhoto(photoUri);
+
+      const persisted = await persistPhoto(result.assets[0].uri);
+      if (persisted) setPhotoUri(persisted.uri);
+    } catch {
+      Alert.alert('Photo error', 'Could not process the selected photo. Please try another.');
+    } finally {
+      setPhotoProcessing(false);
+    }
+  };
+
+  const removePhoto = async () => {
+    if (photoUri) await deletePhoto(photoUri);
+    setPhotoUri(undefined);
   };
 
   const handleDeadlineChange = (text: string) => {
@@ -165,20 +185,62 @@ export default function NewItemScreen() {
         ) : null}
 
         {/* Photo picker */}
-        <TouchableOpacity
-          style={[styles.photoPicker, { backgroundColor: colors.muted, borderColor: colors.border }]}
-          onPress={pickImage}
-          activeOpacity={0.8}
-        >
+        <View style={styles.photoSection}>
           {photoUri ? (
-            <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
+            /* Photo selected — show preview with remove button */
+            <View style={[styles.photoPreviewWrap, { borderColor: colors.border }]}>
+              <Image
+                source={{ uri: photoUri }}
+                style={styles.photoPreview}
+                contentFit="cover"
+                transition={200}
+              />
+              <View style={styles.photoActions}>
+                <TouchableOpacity
+                  style={[styles.photoActionBtn, { backgroundColor: colors.card }]}
+                  onPress={pickImage}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="refresh-cw" size={14} color={colors.foreground} />
+                  <Text style={[styles.photoActionText, { color: colors.foreground }]}>Replace</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.photoActionBtn, { backgroundColor: colors.statusExpiredBg }]}
+                  onPress={removePhoto}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="trash-2" size={14} color={colors.statusExpired} />
+                  <Text style={[styles.photoActionText, { color: colors.statusExpired }]}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           ) : (
-            <>
-              <Feather name="camera" size={28} color={colors.mutedForeground} />
-              <Text style={[styles.photoLabel, { color: colors.mutedForeground }]}>Tap to add photo</Text>
-            </>
+            /* No photo — show picker tap target */
+            <TouchableOpacity
+              style={[styles.photoPicker, { backgroundColor: colors.muted, borderColor: colors.border }]}
+              onPress={pickImage}
+              disabled={photoProcessing}
+              activeOpacity={0.8}
+            >
+              {photoProcessing ? (
+                <>
+                  <ActivityIndicator color={colors.primary} />
+                  <Text style={[styles.photoLabel, { color: colors.mutedForeground }]}>Processing…</Text>
+                </>
+              ) : (
+                <>
+                  <View style={[styles.cameraCircle, { backgroundColor: colors.secondary }]}>
+                    <Feather name="camera" size={22} color={colors.primary} />
+                  </View>
+                  <Text style={[styles.photoLabel, { color: colors.foreground }]}>Add item photo</Text>
+                  <Text style={[styles.photoSub, { color: colors.mutedForeground }]}>
+                    Tap to choose from your camera roll
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+        </View>
 
         <Field label="Item Title" required>
           <TextInput
@@ -193,7 +255,7 @@ export default function NewItemScreen() {
         <Field label="Description">
           <TextInput
             style={[styles.input, styles.textArea, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
-            placeholder="Describe the item's condition and details..."
+            placeholder="Describe the item's condition and details…"
             placeholderTextColor={colors.mutedForeground}
             value={description}
             onChangeText={setDescription}
@@ -287,12 +349,19 @@ export default function NewItemScreen() {
               key={a.id}
               style={[
                 styles.areaOption,
-                { backgroundColor: areaId === a.id ? colors.secondary : colors.card, borderColor: areaId === a.id ? colors.primary : colors.border },
+                {
+                  backgroundColor: areaId === a.id ? colors.secondary : colors.card,
+                  borderColor: areaId === a.id ? colors.primary : colors.border,
+                },
               ]}
               onPress={() => setAreaId(a.id)}
               activeOpacity={0.8}
             >
-              <Feather name={areaId === a.id ? 'check-circle' : 'circle'} size={16} color={areaId === a.id ? colors.primary : colors.mutedForeground} />
+              <Feather
+                name={areaId === a.id ? 'check-circle' : 'circle'}
+                size={16}
+                color={areaId === a.id ? colors.primary : colors.mutedForeground}
+              />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.areaName, { color: colors.foreground }]}>{a.name}</Text>
                 <Text style={[styles.areaAddr, { color: colors.mutedForeground }]}>{a.address}</Text>
@@ -304,10 +373,12 @@ export default function NewItemScreen() {
         <TouchableOpacity
           style={[styles.submitBtn, { backgroundColor: colors.primary }, saving && { opacity: 0.6 }]}
           onPress={handleSubmit}
-          disabled={saving}
+          disabled={saving || photoProcessing}
           activeOpacity={0.85}
         >
-          {saving ? <ActivityIndicator color="#fff" /> : (
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
             <>
               <Feather name="package" size={18} color="#fff" />
               <Text style={styles.submitBtnText}>List Item for Drop-off</Text>
@@ -325,13 +396,22 @@ const styles = StyleSheet.create({
   errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, padding: 12, marginBottom: 16 },
   errorText: { fontSize: 13, fontFamily: 'Inter_400Regular', flex: 1 },
   errorMsg: { fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center' },
+
+  photoSection: { marginBottom: 16 },
   photoPicker: {
     height: 160, borderRadius: 14, borderWidth: 1.5,
-    borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden', marginBottom: 16,
+    borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
-  photoPreview: { width: '100%', height: '100%' },
-  photoLabel: { fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 8 },
+  cameraCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  photoLabel: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
+  photoSub: { fontSize: 12, fontFamily: 'Inter_400Regular' },
+
+  photoPreviewWrap: { borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
+  photoPreview: { width: '100%', height: 200 },
+  photoActions: { flexDirection: 'row', gap: 8, padding: 10 },
+  photoActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
+  photoActionText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
+
   field: { marginBottom: 14 },
   fieldLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', marginBottom: 6 },
   input: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14, fontFamily: 'Inter_400Regular' },
