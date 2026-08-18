@@ -17,6 +17,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useNotificationPrefs, type NotificationPrefs } from '@/lib/notificationPrefs';
 import { registerForPushNotificationsAsync } from '@/lib/pushNotifications';
 import { Storage, STORAGE_KEYS } from '@/lib/storage';
+import { supabase } from '@/lib/supabase';
 import { EmptyState } from '@/components/EmptyState';
 
 interface SettingRow {
@@ -46,6 +47,12 @@ const SETTINGS: SettingRow[] = [
     subtitle: 'When a hub approves or rejects your partnership request',
   },
   {
+    key: 'purchaseConfirmations',
+    icon: 'check-circle',
+    title: 'Purchase confirmations',
+    subtitle: 'When your purchase is confirmed and ready for pickup',
+  },
+  {
     key: 'deadlineReminders',
     icon: 'clock',
     title: 'Deadline reminders',
@@ -68,11 +75,29 @@ export default function NotificationSettingsScreen() {
   }, [currentUser]);
 
   const handleEnablePush = async () => {
+    if (!currentUser) {
+      setTokenError('Sign in before enabling push notifications.');
+      return;
+    }
     setRegistering(true);
     setTokenError('');
     const token = await registerForPushNotificationsAsync();
     if (token) {
       await Storage.set(STORAGE_KEYS.PUSH_TOKEN, token);
+      const { error } = await supabase.from('push_tokens').upsert(
+        {
+          user_id: currentUser.id,
+          token,
+          platform: Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : 'unknown',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,token' }
+      );
+      if (error) {
+        setTokenError(`Could not save this device: ${error.message}`);
+        setRegistering(false);
+        return;
+      }
       setPushToken(token);
     } else {
       setTokenError(

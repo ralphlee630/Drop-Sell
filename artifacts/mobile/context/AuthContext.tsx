@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import type { User } from '@/lib/types';
 import { Storage, STORAGE_KEYS } from '@/lib/storage';
 import { registerForPushNotificationsAsync } from '@/lib/pushNotifications';
@@ -71,9 +72,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const attachPushToken = useCallback(async (user: User): Promise<User> => {
     const cached = await Storage.get<string>(STORAGE_KEYS.PUSH_TOKEN);
     const token = cached ?? (await registerForPushNotificationsAsync());
-    if (!token || token === user.expoPushToken) return user;
+    if (!token) return user;
 
     await Storage.set(STORAGE_KEYS.PUSH_TOKEN, token);
+    const { error: tokenError } = await supabase
+      .from('push_tokens')
+      .upsert(
+        {
+          user_id: user.id,
+          token,
+          platform: Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : 'unknown',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,token' }
+      );
+    if (tokenError) {
+      console.warn('Could not save device push token:', tokenError.message);
+    }
+
+    if (token === user.expoPushToken) return user;
+
     const { data, error } = await supabase
       .from('profiles')
       .update({ expo_push_token: token })
@@ -157,10 +175,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [attachPushToken]);
 
   const logout = useCallback(async () => {
+    const token = await Storage.get<string>(STORAGE_KEYS.PUSH_TOKEN);
+    if (currentUser && token) {
+      const { error: tokenError } = await supabase
+        .from('push_tokens')
+        .delete()
+        .eq('user_id', currentUser.id)
+        .eq('token', token);
+      if (tokenError) {
+        console.warn('Could not remove this device push token:', tokenError.message);
+      }
+    }
+
     const { error } = await supabase.auth.signOut();
     if (error) throw new Error(error.message);
     setCurrentUser(null);
-  }, []);
+  }, [currentUser]);
 
   const updateUser = useCallback((updates: Partial<User>) => {
     setCurrentUser((previous) => {

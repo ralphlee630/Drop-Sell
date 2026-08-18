@@ -12,6 +12,7 @@ Drop & Sell is a Baguio City-exclusive drop-off marketplace where sellers list i
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required mobile env: `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 - Before using marketplace data, run `artifacts/mobile/supabase/schema.sql` in the Supabase SQL Editor.
+- Deploy `artifacts/mobile/supabase/functions/send-notification` as the Supabase Edge Function named `send-notification` to enable cross-device push delivery.
 
 ## Stack
 
@@ -53,6 +54,7 @@ Drop & Sell is a Baguio City-exclusive drop-off marketplace where sellers list i
 
 - The Supabase SQL migration is a one-time manual setup step and must be run before the home screen can show hubs.
 - Cross-device push delivery requires a trusted server or Supabase Edge Function; the mobile client must not send pushes using privileged credentials.
+- The Edge Function must be deployed separately after the SQL schema; its managed service-role secret is never bundled into the mobile app.
 
 ## Pointers
 

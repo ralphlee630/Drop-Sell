@@ -10,6 +10,7 @@ import type {
 } from '@/lib/types';
 import { snapshotFeeAtPurchase } from '@/lib/feeCalculations';
 import { sendLocalNotification } from '@/lib/pushNotifications';
+import { sendRemoteNotification } from '@/lib/remoteNotifications';
 import { uploadItemPhoto } from '@/lib/supabaseStorage';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from './AuthContext';
@@ -52,6 +53,7 @@ type NotificationInsert = {
   title: string;
   message: string;
   related_item_id?: string;
+  related_partnership_id?: string;
   is_read: boolean;
 };
 
@@ -89,7 +91,10 @@ function mapNotification(row: any): AppNotification {
   return row as AppNotification;
 }
 
-async function insertNotifications(payload: NotificationInsert[]): Promise<AppNotification[]> {
+async function insertNotifications(
+  payload: NotificationInsert[],
+  excludePushToken?: string
+): Promise<AppNotification[]> {
   if (payload.length === 0) return [];
 
   const { data, error } = await supabase
@@ -97,7 +102,11 @@ async function insertNotifications(payload: NotificationInsert[]): Promise<AppNo
     .insert(payload)
     .select('*');
   if (error) throw new Error(`Could not create notification: ${error.message}`);
-  return (data ?? []).map(mapNotification);
+  const notifications = (data ?? []).map(mapNotification);
+  await Promise.all(
+    notifications.map((notification) => sendRemoteNotification(notification.id, excludePushToken))
+  );
+  return notifications;
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -297,7 +306,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      const newNotifications = await insertNotifications(notificationPayload);
+      const newNotifications = await insertNotifications(notificationPayload, currentUser.expoPushToken);
       const transaction = mapTransaction(transactionRow);
       const soldItem = mapItem(soldRow);
 
@@ -386,7 +395,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             message: `"${item.title}" (${item.product_code}) is ready for buyers.`,
             related_item_id: itemId,
             is_read: false,
-          }])
+          }], currentUser?.expoPushToken)
         : [];
 
       setItems((previous) => previous.map((entry) => (entry.id === itemId ? mapItem(data) : entry)));
@@ -401,7 +410,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [items, sellerProfiles, notifyCurrentDevice]
+    [items, sellerProfiles, notifyCurrentDevice, currentUser]
   );
 
   const requestPartnership = useCallback(
@@ -445,8 +454,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             message: status === 'approved'
               ? `You can now list items at ${area?.name ?? 'the hub'}.`
               : `Your request with ${area?.name ?? 'the hub'} was declined.`,
+            related_partnership_id: partnershipId,
             is_read: false,
-          }])
+          }], currentUser?.expoPushToken)
         : [];
 
       setPartnerships((previous) =>
@@ -465,7 +475,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [partnerships, sellerProfiles, droppingAreas, notifyCurrentDevice]
+    [partnerships, sellerProfiles, droppingAreas, notifyCurrentDevice, currentUser]
   );
 
   const approvePartnership = useCallback(

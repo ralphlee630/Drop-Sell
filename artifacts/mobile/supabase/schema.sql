@@ -15,6 +15,26 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.push_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id text not null references public.profiles(id) on delete cascade,
+  token text not null,
+  platform text not null default 'unknown'
+    check (platform in ('ios', 'android', 'unknown')),
+  updated_at timestamptz not null default now(),
+  unique (user_id, token)
+);
+
+create table if not exists public.notification_preferences (
+  user_id text primary key references public.profiles(id) on delete cascade,
+  item_dropped boolean not null default true,
+  item_sold boolean not null default true,
+  partnership_updates boolean not null default true,
+  purchase_confirmations boolean not null default true,
+  deadline_reminders boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.dropping_areas (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -89,14 +109,19 @@ create table if not exists public.notifications (
   title text not null,
   message text not null,
   related_item_id uuid references public.items(id) on delete cascade,
+  related_partnership_id uuid references public.partnerships(id) on delete cascade,
   is_read boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.notifications
+  add column if not exists related_partnership_id uuid references public.partnerships(id) on delete cascade;
 
 create index if not exists items_area_status_idx on public.items (dropping_area_id, status);
 create index if not exists items_seller_idx on public.items (seller_id);
 create index if not exists notifications_user_created_idx on public.notifications (user_id, created_at desc);
 create index if not exists partnerships_area_status_idx on public.partnerships (dropping_area_id, status);
+create index if not exists push_tokens_user_idx on public.push_tokens (user_id);
 
 -- Helper used by admin policies. It is security-definer to avoid policy recursion.
 create or replace function public.is_super_admin()
@@ -113,6 +138,8 @@ as $$
 $$;
 
 alter table public.profiles enable row level security;
+alter table public.push_tokens enable row level security;
+alter table public.notification_preferences enable row level security;
 alter table public.dropping_areas enable row level security;
 alter table public.seller_profiles enable row level security;
 alter table public.partnerships enable row level security;
@@ -131,6 +158,32 @@ drop policy if exists profiles_update_own on public.profiles;
 create policy profiles_update_own on public.profiles for update
   using (id = auth.uid()::text or public.is_super_admin())
   with check (id = auth.uid()::text or public.is_super_admin());
+
+-- Push tokens and notification preferences are private to each account.
+drop policy if exists push_tokens_select_own on public.push_tokens;
+create policy push_tokens_select_own on public.push_tokens for select
+  using (user_id = auth.uid()::text);
+drop policy if exists push_tokens_insert_own on public.push_tokens;
+create policy push_tokens_insert_own on public.push_tokens for insert
+  with check (user_id = auth.uid()::text);
+drop policy if exists push_tokens_update_own on public.push_tokens;
+create policy push_tokens_update_own on public.push_tokens for update
+  using (user_id = auth.uid()::text)
+  with check (user_id = auth.uid()::text);
+drop policy if exists push_tokens_delete_own on public.push_tokens;
+create policy push_tokens_delete_own on public.push_tokens for delete
+  using (user_id = auth.uid()::text);
+
+drop policy if exists notification_preferences_select_own on public.notification_preferences;
+create policy notification_preferences_select_own on public.notification_preferences for select
+  using (user_id = auth.uid()::text);
+drop policy if exists notification_preferences_insert_own on public.notification_preferences;
+create policy notification_preferences_insert_own on public.notification_preferences for insert
+  with check (user_id = auth.uid()::text);
+drop policy if exists notification_preferences_update_own on public.notification_preferences;
+create policy notification_preferences_update_own on public.notification_preferences for update
+  using (user_id = auth.uid()::text)
+  with check (user_id = auth.uid()::text);
 
 -- Public browsing tables.
 drop policy if exists dropping_areas_public_read on public.dropping_areas;

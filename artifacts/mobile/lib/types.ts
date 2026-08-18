@@ -89,6 +89,7 @@ export interface AppNotification {
   title: string;
   message: string;
   related_item_id?: string;
+  related_partnership_id?: string;
   is_read: boolean;
   created_at: string;
 }
