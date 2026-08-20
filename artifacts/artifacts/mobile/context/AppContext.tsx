@@ -8,9 +8,7 @@ import type {
   SellerProfile,
   Transaction,
 } from '@/lib/types';
-import { snapshotFeeAtPurchase } from '@/lib/feeCalculations';
 import { sendLocalNotification } from '@/lib/pushNotifications';
-import { sendRemoteNotification } from '@/lib/remoteNotifications';
 import { uploadItemPhoto } from '@/lib/supabaseStorage';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from './AuthContext';
@@ -47,16 +45,6 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
-type NotificationInsert = {
-  user_id: string;
-  type: AppNotification['type'];
-  title: string;
-  message: string;
-  related_item_id?: string;
-  related_partnership_id?: string;
-  is_read: boolean;
-};
-
 function mapArea(row: any): DroppingArea {
   return row as DroppingArea;
 }
@@ -89,24 +77,6 @@ function mapTransaction(row: any): Transaction {
 
 function mapNotification(row: any): AppNotification {
   return row as AppNotification;
-}
-
-async function insertNotifications(
-  payload: NotificationInsert[],
-  excludePushToken?: string
-): Promise<AppNotification[]> {
-  if (payload.length === 0) return [];
-
-  const { data, error } = await supabase
-    .from('notifications')
-    .insert(payload)
-    .select('*');
-  if (error) throw new Error(`Could not create notification: ${error.message}`);
-  const notifications = (data ?? []).map(mapNotification);
-  await Promise.all(
-    notifications.map((notification) => sendRemoteNotification(notification.id, excludePushToken))
-  );
-  return notifications;
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -251,76 +221,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     async (itemId: string): Promise<Transaction> => {
       if (!currentUser) throw new Error('Must be logged in to purchase');
 
-      const { data: itemRow, error: itemError } = await supabase
-        .from('items')
-        .select('*')
-        .eq('id', itemId)
-        .eq('status', 'dropped')
-        .single();
-      if (itemError || !itemRow) throw new Error('Item is no longer available for purchase');
+      // purchase_item is a SECURITY DEFINER Postgres function: it row-locks the
+      // item, recomputes the handling fee server-side from the real deadline
+      // (never trusting a client-supplied total), and inserts the transaction
+      // + both notifications atomically. See supabase/security-patch-01.sql.
+      const { data, error } = await supabase.rpc('purchase_item', { p_item_id: itemId });
+      if (error) throw new Error(`Purchase failed: ${error.message}`);
 
-      const item = mapItem(itemRow);
-      const fee = snapshotFeeAtPurchase(item);
-      const { data: transactionRow, error: transactionError } = await supabase
-        .from('transactions')
-        .insert({
-          item_id: itemId,
-          buyer_id: currentUser.id,
-          item_amount: item.amount,
-          handling_fee_applied: fee,
-          total_amount: item.amount + fee,
-          status: 'completed',
-        })
-        .select('*')
-        .single();
-      if (transactionError) throw new Error(`Purchase failed: ${transactionError.message}`);
+      const transaction = mapTransaction(data);
+      await refreshData();
 
-      const { data: soldRow, error: soldError } = await supabase
-        .from('items')
-        .update({ status: 'sold' })
-        .eq('id', itemId)
-        .eq('status', 'dropped')
-        .select('*')
-        .single();
-      if (soldError) throw new Error(`Could not reserve item: ${soldError.message}`);
-
-      const seller = sellerProfiles.find((profile) => profile.id === item.seller_id);
-      const notificationPayload: NotificationInsert[] = [
-        {
-          user_id: currentUser.id,
-          type: 'purchase_confirmed',
-          title: 'Purchase Confirmed',
-          message: `Your purchase of "${item.title}" is confirmed. Pick it up at the hub.`,
-          related_item_id: itemId,
-          is_read: false,
-        },
-      ];
-      if (seller) {
-        notificationPayload.push({
-          user_id: seller.user_id,
-          type: 'item_sold',
-          title: 'Item Sold',
-          message: `"${item.title}" (${item.product_code}) was purchased by a buyer.`,
-          related_item_id: itemId,
-          is_read: false,
-        });
-      }
-
-      const newNotifications = await insertNotifications(notificationPayload, currentUser.expoPushToken);
-      const transaction = mapTransaction(transactionRow);
-      const soldItem = mapItem(soldRow);
-
-      setItems((previous) => previous.map((entry) => (entry.id === itemId ? soldItem : entry)));
-      setTransactions((previous) => [transaction, ...previous]);
-      setNotifications((previous) => [...newNotifications, ...previous]);
+      const item = items.find((entry) => entry.id === itemId);
+      const seller = item ? sellerProfiles.find((profile) => profile.id === item.seller_id) : undefined;
 
       await notifyCurrentDevice(
         currentUser.id,
         'Purchase Confirmed',
-        `"${item.title}" is yours! Pick it up at the hub.`,
+        item ? `"${item.title}" is yours! Pick it up at the hub.` : 'Your purchase is confirmed.',
         { itemId, screen: 'item' }
       );
-      if (seller) {
+      if (seller && item) {
         await notifyCurrentDevice(
           seller.user_id,
           'Item Sold',
@@ -331,7 +251,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       return transaction;
     },
-    [currentUser, sellerProfiles, notifyCurrentDevice]
+    [currentUser, items, sellerProfiles, notifyCurrentDevice, refreshData]
   );
 
   const createItem = useCallback(
@@ -345,24 +265,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         photoUrl = await uploadItemPhoto(photoUri, currentUser.id, `${Date.now()}`);
       }
 
-      const { data, error } = await supabase
-        .from('items')
-        .insert({
-          seller_id: seller.id,
-          dropping_area_id: form.dropping_area_id,
-          title: form.title.trim(),
-          description: form.description.trim(),
-          product_code: form.product_code.trim(),
-          buyer_name: form.buyer_name.trim() || null,
-          amount: Number(form.amount),
-          base_handling_fee: Number(form.base_handling_fee),
-          late_handling_fee: Number(form.late_handling_fee),
-          photo_url: photoUrl,
-          status: 'pending_dropoff',
-          deadline_at: form.deadline_at.toISOString(),
-        })
-        .select('*')
-        .single();
+      // create_item is a SECURITY DEFINER Postgres function: it checks the
+      // caller has an APPROVED partnership with this dropping area before
+      // allowing the insert — that check cannot be skipped by calling the
+      // API directly. See supabase/security-patch-01.sql.
+      const { data, error } = await supabase.rpc('create_item', {
+        p_dropping_area_id: form.dropping_area_id,
+        p_title: form.title.trim(),
+        p_description: form.description.trim(),
+        p_product_code: form.product_code.trim(),
+        p_buyer_name: form.buyer_name.trim() || null,
+        p_amount: Number(form.amount),
+        p_base_handling_fee: Number(form.base_handling_fee),
+        p_late_handling_fee: Number(form.late_handling_fee),
+        p_photo_url: photoUrl,
+        p_deadline_at: form.deadline_at.toISOString(),
+      });
       if (error) throw new Error(`Could not save listing: ${error.message}`);
 
       const item = mapItem(data);
@@ -377,30 +295,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const item = items.find((entry) => entry.id === itemId);
       if (!item) return;
 
-      const { data, error } = await supabase
-        .from('items')
-        .update({ status: 'dropped', dropped_at: new Date().toISOString() })
-        .eq('id', itemId)
-        .eq('status', 'pending_dropoff')
-        .select('*')
-        .single();
+      // mark_item_dropped is a SECURITY DEFINER Postgres function: it verifies
+      // the caller is actually this hub's admin (or a super admin) before
+      // allowing the transition, and writes the seller notification itself.
+      // See supabase/security-patch-01.sql.
+      const { data, error } = await supabase.rpc('mark_item_dropped', { p_item_id: itemId });
       if (error) throw new Error(`Could not mark item dropped: ${error.message}`);
 
-      const seller = sellerProfiles.find((profile) => profile.id === item.seller_id);
-      const newNotifications = seller
-        ? await insertNotifications([{
-            user_id: seller.user_id,
-            type: 'item_dropped',
-            title: 'Item Arrived at Hub',
-            message: `"${item.title}" (${item.product_code}) is ready for buyers.`,
-            related_item_id: itemId,
-            is_read: false,
-          }], currentUser?.expoPushToken)
-        : [];
-
       setItems((previous) => previous.map((entry) => (entry.id === itemId ? mapItem(data) : entry)));
-      setNotifications((previous) => [...newNotifications, ...previous]);
+      await refreshData();
 
+      const seller = sellerProfiles.find((profile) => profile.id === item.seller_id);
       if (seller) {
         await notifyCurrentDevice(
           seller.user_id,
@@ -410,7 +315,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [items, sellerProfiles, notifyCurrentDevice, currentUser]
+    [items, sellerProfiles, notifyCurrentDevice, refreshData]
   );
 
   const requestPartnership = useCallback(
@@ -433,37 +338,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const partnership = partnerships.find((entry) => entry.id === partnershipId);
       if (!partnership) return;
 
-      const { data, error } = await supabase
-        .from('partnerships')
-        .update({
-          status,
-          approved_at: status === 'approved' ? new Date().toISOString() : null,
-        })
-        .eq('id', partnershipId)
-        .select('*')
-        .single();
+      // respond_to_partnership is a SECURITY DEFINER Postgres function: it
+      // verifies the caller is actually this hub's admin (or a super admin)
+      // before allowing the decision, and writes the matching seller
+      // notification itself so the two can never drift apart.
+      // See supabase/security-patch-01.sql.
+      const { data, error } = await supabase.rpc('respond_to_partnership', {
+        p_partnership_id: partnershipId,
+        p_status: status,
+      });
       if (error) throw new Error(`Could not update partnership: ${error.message}`);
-
-      const seller = sellerProfiles.find((profile) => profile.id === partnership.seller_id);
-      const area = droppingAreas.find((entry) => entry.id === partnership.dropping_area_id);
-      const newNotifications = seller
-        ? await insertNotifications([{
-            user_id: seller.user_id,
-            type: status === 'approved' ? 'partnership_approved' : 'partnership_rejected',
-            title: status === 'approved' ? 'Partnership Approved' : 'Partnership Not Approved',
-            message: status === 'approved'
-              ? `You can now list items at ${area?.name ?? 'the hub'}.`
-              : `Your request with ${area?.name ?? 'the hub'} was declined.`,
-            related_partnership_id: partnershipId,
-            is_read: false,
-          }], currentUser?.expoPushToken)
-        : [];
 
       setPartnerships((previous) =>
         previous.map((entry) => (entry.id === partnershipId ? mapPartnership(data) : entry))
       );
-      setNotifications((previous) => [...newNotifications, ...previous]);
+      await refreshData();
 
+      const seller = sellerProfiles.find((profile) => profile.id === partnership.seller_id);
+      const area = droppingAreas.find((entry) => entry.id === partnership.dropping_area_id);
       if (seller) {
         await notifyCurrentDevice(
           seller.user_id,
@@ -475,7 +367,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
     },
-    [partnerships, sellerProfiles, droppingAreas, notifyCurrentDevice, currentUser]
+    [partnerships, sellerProfiles, droppingAreas, notifyCurrentDevice, refreshData]
   );
 
   const approvePartnership = useCallback(

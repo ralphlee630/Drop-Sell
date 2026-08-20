@@ -1,8 +1,14 @@
 import type { Item } from './types';
 
-/** Returns true if the item's deadline has passed and it hasn't been dropped yet */
+/** Returns true if the item's deadline has passed and it hasn't sold yet.
+ *  Applies whether the item is still waiting to be dropped off OR already
+ *  dropped and sitting unsold at the hub — the deadline is a pickup/sale
+ *  deadline, not just a "must arrive at hub" deadline. */
 export function isOverdue(item: Item): boolean {
-  return new Date() > new Date(item.deadline_at) && item.status === 'pending_dropoff';
+  return (
+    new Date() > new Date(item.deadline_at) &&
+    (item.status === 'pending_dropoff' || item.status === 'dropped')
+  );
 }
 
 /** Returns the effective handling fee at the current moment */
