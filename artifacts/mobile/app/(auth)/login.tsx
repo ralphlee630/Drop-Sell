@@ -10,7 +10,7 @@ import {
   View,
   ActivityIndicator,
 } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import { Feather, AntDesign } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
@@ -19,12 +19,13 @@ import { useAuth } from '@/context/AuthContext';
 export default function LoginScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { login } = useAuth();
+  const { login, signInWithGoogle } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleLogin = async () => {
@@ -41,6 +42,19 @@ export default function LoginScreen() {
       setError(e instanceof Error ? e.message : 'Login failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+      router.replace('/(tabs)');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Google sign-in failed');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -75,6 +89,28 @@ export default function LoginScreen() {
               <Text style={[styles.errorText, { color: colors.statusExpired }]}>{error}</Text>
             </View>
           ) : null}
+
+          <TouchableOpacity
+            style={[styles.googleBtn, { backgroundColor: colors.background, borderColor: colors.border }, googleLoading && styles.btnDisabled]}
+            onPress={handleGoogleSignIn}
+            disabled={googleLoading}
+            activeOpacity={0.85}
+          >
+            {googleLoading ? (
+              <ActivityIndicator color={colors.foreground} />
+            ) : (
+              <>
+                <AntDesign name="google" size={18} color="#EA4335" />
+                <Text style={[styles.googleBtnText, { color: colors.foreground }]}>Continue with Google</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.dividerRow}>
+            <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+            <Text style={[styles.dividerText, { color: colors.mutedForeground }]}>or</Text>
+            <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+          </View>
 
           <View style={styles.field}>
             <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Email</Text>
@@ -181,4 +217,9 @@ const styles = StyleSheet.create({
   footer: { flexDirection: 'row', justifyContent: 'center' },
   footerText: { fontSize: 14, fontFamily: 'Inter_400Regular' },
   link: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  googleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 12, borderWidth: 1, paddingVertical: 13, marginBottom: 16 },
+  googleBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
+  dividerLine: { flex: 1, height: 1 },
+  dividerText: { fontSize: 12, fontFamily: 'Inter_400Regular' },
 });

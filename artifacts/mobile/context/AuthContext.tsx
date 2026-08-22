@@ -1,16 +1,23 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 import type { User } from '@/lib/types';
 import { Storage, STORAGE_KEYS } from '@/lib/storage';
 import { registerForPushNotificationsAsync } from '@/lib/pushNotifications';
 import { supabase, type ProfileRow } from '@/lib/supabase';
+
+// Required once per app so the in-app browser used for Google sign-in
+// correctly hands control back to the app after the redirect completes.
+WebBrowser.maybeCompleteAuthSession();
 
 interface AuthContextValue {
   currentUser: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, fullName: string) => Promise<void>;
+  register: (email: string, password: string, fullName: string) => Promise<{ needsEmailVerification: boolean }>;
+  signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (updates: Partial<User>) => void;
 }
@@ -166,11 +173,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     if (error) throw new Error(error.message);
     if (!data.user) throw new Error('Supabase did not create the account');
+
+    // No session means Supabase's "Confirm email" setting is on and this
+    // account is awaiting email verification — that's a successful
+    // registration, not an error. The caller shows a proper success state
+    // for this, rather than an error message.
     if (!data.session) {
-      throw new Error('Account created. Check your email to verify it, then sign in.');
+      return { needsEmailVerification: true };
     }
 
     const profile = await loadOrCreateProfile(data.user);
+    setCurrentUser(await attachPushToken(profile));
+    return { needsEmailVerification: false };
+  }, [attachPushToken]);
+
+  const signInWithGoogle = useCallback(async () => {
+    // The redirect target the browser hands control back to once Google
+    // sign-in completes. Uses the app's own custom scheme (already
+    // configured in app.json), so this works the same in Expo Go and in a
+    // standalone build.
+    const redirectTo = Linking.createURL('auth/callback');
+
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo, skipBrowserRedirect: true },
+    });
+    if (error) throw new Error(error.message);
+    if (!data?.url) throw new Error('Could not start Google sign-in');
+
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (result.type !== 'success' || !('url' in result) || !result.url) {
+      throw new Error('Google sign-in was cancelled');
+    }
+
+    // Supabase returns the session tokens as a URL fragment on the redirect,
+    // e.g. myapp://auth/callback#access_token=...&refresh_token=...
+    const fragment = result.url.split('#')[1] ?? result.url.split('?')[1] ?? '';
+    const params = new URLSearchParams(fragment);
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+
+    if (!accessToken || !refreshToken) {
+      const errorDescription = params.get('error_description');
+      throw new Error(errorDescription || 'Google sign-in did not return a valid session');
+    }
+
+    const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (sessionError) throw new Error(sessionError.message);
+    if (!sessionData.user) throw new Error('Could not establish a session');
+
+    const profile = await loadOrCreateProfile(sessionData.user);
     setCurrentUser(await attachPushToken(profile));
   }, [attachPushToken]);
 
@@ -222,6 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: !!currentUser,
         login,
         register,
+        signInWithGoogle,
         logout,
         updateUser,
       }}
