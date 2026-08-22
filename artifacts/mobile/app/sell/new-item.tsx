@@ -40,9 +40,8 @@ export default function NewItemScreen() {
   const [productCode, setProductCode] = useState(generateProductCode());
   const [buyerName, setBuyerName] = useState('');
   const [amount, setAmount] = useState('');
-  const [baseFee, setBaseFee] = useState('');
-  const [lateFee, setLateFee] = useState('');
   const [areaId, setAreaId] = useState(approvedAreas[0]?.id ?? '');
+  const selectedArea = approvedAreas.find((a) => a.id === areaId);
   const [photoUri, setPhotoUri] = useState<string | undefined>();
   const [photoProcessing, setPhotoProcessing] = useState(false);
   const [deadline, setDeadline] = useState(() => {
@@ -100,8 +99,6 @@ export default function NewItemScreen() {
   const handleSubmit = async () => {
     if (!title.trim()) { setError('Title is required'); return; }
     if (!amount.trim() || isNaN(parseFloat(amount))) { setError('Enter a valid amount'); return; }
-    if (!baseFee.trim() || isNaN(parseFloat(baseFee))) { setError('Enter a valid base handling fee'); return; }
-    if (!lateFee.trim() || isNaN(parseFloat(lateFee))) { setError('Enter a valid late handling fee'); return; }
     if (!areaId) { setError('Select a dropping area'); return; }
     if (isNaN(deadline.getTime())) { setError('Enter a valid deadline date (YYYY-MM-DD)'); return; }
 
@@ -114,8 +111,6 @@ export default function NewItemScreen() {
         product_code: productCode.trim(),
         buyer_name: buyerName.trim(),
         amount,
-        base_handling_fee: baseFee,
-        late_handling_fee: lateFee,
         deadline_at: deadline,
         dropping_area_id: areaId,
       }, photoUri);
@@ -306,32 +301,7 @@ export default function NewItemScreen() {
           </View>
         </View>
 
-        <View style={styles.row}>
-          <View style={{ flex: 1 }}>
-            <Field label="Base Fee (₱)" required>
-              <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
-                placeholder="0.00"
-                placeholderTextColor={colors.mutedForeground}
-                value={baseFee}
-                onChangeText={setBaseFee}
-                keyboardType="decimal-pad"
-              />
-            </Field>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Field label="Late Fee (₱)" required>
-              <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
-                placeholder="0.00"
-                placeholderTextColor={colors.mutedForeground}
-                value={lateFee}
-                onChangeText={setLateFee}
-                keyboardType="decimal-pad"
-              />
-            </Field>
-          </View>
-        </View>
+
 
         <Field label="Pickup Deadline (YYYY-MM-DD)" required>
           <TextInput
@@ -369,6 +339,17 @@ export default function NewItemScreen() {
             </TouchableOpacity>
           ))}
         </Field>
+
+        {selectedArea && (
+          <View style={[styles.feeInfoBox, { backgroundColor: colors.secondary }]}>
+            <Feather name="info" size={14} color={colors.primary} />
+            <Text style={[styles.feeInfoText, { color: colors.foreground }]}>
+              {selectedArea.name} charges ₱{selectedArea.base_handling_fee.toFixed(2)} handling
+              (+₱{selectedArea.late_handling_fee.toFixed(2)} if picked up after the deadline). This
+              fee is set by the hub and applies automatically — you don't need to enter it.
+            </Text>
+          </View>
+        )}
 
         <TouchableOpacity
           style={[styles.submitBtn, { backgroundColor: colors.primary }, saving && { opacity: 0.6 }]}
@@ -423,6 +404,8 @@ const styles = StyleSheet.create({
   areaOption: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 10, borderWidth: 1, padding: 12, marginBottom: 8 },
   areaName: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   areaAddr: { fontSize: 12, fontFamily: 'Inter_400Regular', marginTop: 1 },
+  feeInfoBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 10, padding: 12, marginBottom: 14 },
+  feeInfoText: { flex: 1, fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 17 },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, paddingVertical: 14, marginTop: 4 },
   submitBtnText: { color: '#fff', fontSize: 15, fontFamily: 'Inter_600SemiBold' },
   noAreaBox: { alignItems: 'center', gap: 12 },

@@ -12,7 +12,7 @@ export default function AdminScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { currentUser } = useAuth();
-  const { droppingAreas, sellerProfiles, items, transactions, approveArea } = useApp();
+  const { droppingAreas, sellerProfiles, items, transactions, reviewArea } = useApp();
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
@@ -81,16 +81,29 @@ export default function AdminScreen() {
               <View style={styles.pendingInfo}>
                 <Text style={[styles.pendingName, { color: colors.foreground }]}>{area.name}</Text>
                 <Text style={[styles.pendingAddr, { color: colors.mutedForeground }]}>{area.address}</Text>
+                <Text style={[styles.pendingFees, { color: colors.mutedForeground }]}>
+                  Proposed fees: ₱{area.base_handling_fee.toFixed(2)} base · ₱{area.late_handling_fee.toFixed(2)} late
+                </Text>
                 <StatusBadge status={area.status} size="sm" />
               </View>
-              <TouchableOpacity
-                style={[styles.approveBtn, { backgroundColor: colors.statusSold }]}
-                onPress={() => approveArea(area.id)}
-                activeOpacity={0.85}
-              >
-                <Feather name="check" size={16} color="#fff" />
-                <Text style={styles.approveBtnText}>Approve</Text>
-              </TouchableOpacity>
+              <View style={styles.pendingActions}>
+                <TouchableOpacity
+                  style={[styles.approveBtn, { backgroundColor: colors.statusSold }]}
+                  onPress={() => reviewArea(area.id, 'active')}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="check" size={16} color="#fff" />
+                  <Text style={styles.approveBtnText}>Approve</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.rejectBtn, { borderColor: colors.destructive }]}
+                  onPress={() => reviewArea(area.id, 'rejected')}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="x" size={16} color={colors.destructive} />
+                  <Text style={[styles.rejectBtnText, { color: colors.destructive }]}>Reject</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ))}
 
@@ -104,6 +117,9 @@ export default function AdminScreen() {
               <View key={area.id} style={[styles.activeCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Text style={[styles.activeName, { color: colors.foreground }]}>{area.name}</Text>
                 <Text style={[styles.activeAddr, { color: colors.mutedForeground }]}>{area.address}</Text>
+                <Text style={[styles.pendingFees, { color: colors.mutedForeground }]}>
+                  ₱{area.base_handling_fee.toFixed(2)} base · ₱{area.late_handling_fee.toFixed(2)} late fee
+                </Text>
                 <View style={styles.activeStats}>
                   <Text style={[styles.activeStat, { color: colors.statusDropped }]}>
                     {areaItems.filter((i) => i.status === 'dropped').length} ready
@@ -141,8 +157,12 @@ const styles = StyleSheet.create({
   pendingInfo: { flex: 1, gap: 4 },
   pendingName: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   pendingAddr: { fontSize: 12, fontFamily: 'Inter_400Regular' },
+  pendingFees: { fontSize: 11, fontFamily: 'Inter_500Medium' },
+  pendingActions: { gap: 8 },
   approveBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
   approveBtnText: { color: '#fff', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  rejectBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1 },
+  rejectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   activeCard: { borderRadius: 14, borderWidth: 1, padding: 14, marginHorizontal: 16, marginBottom: 8 },
   activeName: { fontSize: 14, fontFamily: 'Inter_600SemiBold', marginBottom: 2 },
   activeAddr: { fontSize: 12, fontFamily: 'Inter_400Regular', marginBottom: 6 },

@@ -32,6 +32,8 @@ export interface DroppingArea {
   contact_info: string;
   admin_user_id: string;
   status: DroppingAreaStatus;
+  base_handling_fee: number;
+  late_handling_fee: number;
   created_at: string;
 }
 
@@ -100,9 +102,17 @@ export interface NewItemForm {
   product_code: string;
   buyer_name: string;
   amount: string;
-  base_handling_fee: string;
-  late_handling_fee: string;
   deadline_at: Date;
   dropping_area_id: string;
   photo_uri?: string;
+}
+
+export interface NewDroppingAreaForm {
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  contact_info: string;
+  base_handling_fee: string;
+  late_handling_fee: string;
 }

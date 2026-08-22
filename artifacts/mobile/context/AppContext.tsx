@@ -4,6 +4,7 @@ import type {
   DroppingArea,
   Item,
   NewItemForm,
+  NewDroppingAreaForm,
   Partnership,
   SellerProfile,
   Transaction,
@@ -40,7 +41,13 @@ interface AppContextValue {
   markNotificationRead: (notifId: string) => Promise<void>;
   markAllNotificationsRead: () => Promise<void>;
   becomeSeller: (businessName: string, bio: string) => Promise<SellerProfile>;
-  approveArea: (areaId: string) => Promise<void>;
+  registerDroppingArea: (form: NewDroppingAreaForm) => Promise<DroppingArea>;
+  reviewArea: (
+    areaId: string,
+    status: 'active' | 'rejected' | 'suspended',
+    baseFee?: number,
+    lateFee?: number
+  ) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -266,9 +273,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       // create_item is a SECURITY DEFINER Postgres function: it checks the
-      // caller has an APPROVED partnership with this dropping area before
-      // allowing the insert — that check cannot be skipped by calling the
-      // API directly. See supabase/security-patch-01.sql.
+      // caller has an APPROVED partnership with this dropping area, and
+      // reads the handling fees directly from the dropping area itself —
+      // the fee is never accepted from the client, so a seller (or a
+      // modified client) can never set their own fee.
+      // See supabase/security-patch-02.sql.
       const { data, error } = await supabase.rpc('create_item', {
         p_dropping_area_id: form.dropping_area_id,
         p_title: form.title.trim(),
@@ -276,8 +285,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         p_product_code: form.product_code.trim(),
         p_buyer_name: form.buyer_name.trim() || null,
         p_amount: Number(form.amount),
-        p_base_handling_fee: Number(form.base_handling_fee),
-        p_late_handling_fee: Number(form.late_handling_fee),
         p_photo_url: photoUrl,
         p_deadline_at: form.deadline_at.toISOString(),
       });
@@ -427,18 +434,55 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [currentUser, updateUser]
   );
 
-  const approveArea = useCallback(async (areaId: string) => {
-    const { data, error } = await supabase
-      .from('dropping_areas')
-      .update({ status: 'active' })
-      .eq('id', areaId)
-      .select('*')
-      .single();
-    if (error) throw new Error(`Could not approve area: ${error.message}`);
-    setDroppingAreas((previous) =>
-      previous.map((area) => (area.id === areaId ? mapArea(data) : area))
-    );
-  }, []);
+  const registerDroppingArea = useCallback(
+    async (form: NewDroppingAreaForm): Promise<DroppingArea> => {
+      // register_dropping_area is a SECURITY DEFINER Postgres function: it
+      // always creates the hub as 'pending_approval' — the client can never
+      // set a hub live directly, no matter what status is sent. See
+      // supabase/security-patch-02.sql.
+      const { data, error } = await supabase.rpc('register_dropping_area', {
+        p_name: form.name.trim(),
+        p_address: form.address.trim(),
+        p_latitude: form.latitude,
+        p_longitude: form.longitude,
+        p_contact_info: form.contact_info.trim(),
+        p_base_handling_fee: Number(form.base_handling_fee),
+        p_late_handling_fee: Number(form.late_handling_fee),
+      });
+      if (error) throw new Error(`Could not register dropping area: ${error.message}`);
+
+      const area = mapArea(data);
+      setDroppingAreas((previous) => [area, ...previous]);
+      return area;
+    },
+    []
+  );
+
+  const reviewArea = useCallback(
+    async (
+      areaId: string,
+      status: 'active' | 'rejected' | 'suspended',
+      baseFee?: number,
+      lateFee?: number
+    ) => {
+      // review_dropping_area is a SECURITY DEFINER Postgres function: it
+      // verifies the caller is actually a super admin before allowing any
+      // status change — a raw client update can no longer approve a hub
+      // even for its own owner, enforced by a database trigger.
+      // See supabase/security-patch-02.sql.
+      const { data, error } = await supabase.rpc('review_dropping_area', {
+        p_area_id: areaId,
+        p_status: status,
+        p_base_handling_fee: baseFee ?? null,
+        p_late_handling_fee: lateFee ?? null,
+      });
+      if (error) throw new Error(`Could not review area: ${error.message}`);
+      setDroppingAreas((previous) =>
+        previous.map((area) => (area.id === areaId ? mapArea(data) : area))
+      );
+    },
+    []
+  );
 
   return (
     <AppContext.Provider
@@ -469,7 +513,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         markNotificationRead,
         markAllNotificationsRead,
         becomeSeller,
-        approveArea,
+        registerDroppingArea,
+        reviewArea,
       }}
     >
       {children}

@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
@@ -48,10 +49,22 @@ export default function AreasScreen() {
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: topPad + 12, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        <Text style={[styles.title, { color: colors.foreground }]}>Dropping Areas</Text>
-        <Text style={[styles.sub, { color: colors.mutedForeground }]}>
-          {activeAreas.length} active hubs in Baguio City
-        </Text>
+        <View style={styles.titleRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.title, { color: colors.foreground }]}>Dropping Areas</Text>
+            <Text style={[styles.sub, { color: colors.mutedForeground }]}>
+              {activeAreas.length} active hubs in Baguio City
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.registerBtn, { backgroundColor: colors.secondary }]}
+            onPress={() => router.push('/areas/register')}
+            activeOpacity={0.85}
+          >
+            <Feather name="plus-circle" size={15} color={colors.primary} />
+            <Text style={[styles.registerBtnText, { color: colors.primary }]}>Register Hub</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Search */}
         <View style={[styles.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -123,6 +136,9 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 26, fontFamily: 'Inter_700Bold', marginBottom: 2 },
   sub: { fontSize: 13, fontFamily: 'Inter_400Regular', marginBottom: 12 },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  registerBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
+  registerBtnText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
